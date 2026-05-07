@@ -55,6 +55,11 @@ class BotSnapshot:
     cash: float
     realized_pnl: float
     equity: float
+    active_grid_levels: int
+    grid_levels_crossed_in_step: int
+    fills_in_step: int
+    cumulative_grid_levels_crossed: int
+    cumulative_fills: int
 
 
 class GridTradingBot:
@@ -68,6 +73,8 @@ class GridTradingBot:
         self.realized_pnl = 0.0
         self.center_price: float | None = None
         self.last_price: float | None = None
+        self.cumulative_grid_levels_crossed = 0
+        self.cumulative_fills = 0
 
     def infer_regime(
         self,
@@ -97,6 +104,7 @@ class GridTradingBot:
         regime: GridBias | None = None,
         size_scale: float = 1.0,
         spacing_scale: float = 1.0,
+        spacing_pct_override: float | None = None,
         order_notional: float | None = None,
         inventory_limit_notional: float | None = None,
     ) -> GridControl:
@@ -105,7 +113,7 @@ class GridTradingBot:
         daily_vol = annualized_vol / math.sqrt(365)
         base_spacing = max(self.config.base_spacing_bps / 10_000.0, daily_vol * 0.9)
         spacing_pct = _clamp(
-            base_spacing * spacing_scale,
+            spacing_pct_override if spacing_pct_override is not None else base_spacing * spacing_scale,
             self.config.min_spacing_bps / 10_000.0,
             self.config.max_spacing_bps / 10_000.0,
         )
@@ -159,16 +167,20 @@ class GridTradingBot:
         regime: GridBias | None = None,
         size_scale: float = 1.0,
         spacing_scale: float = 1.0,
+        spacing_pct_override: float | None = None,
         order_notional: float | None = None,
         inventory_limit_notional: float | None = None,
     ) -> BotSnapshot:
         self.price_history.append(price)
+        grid_levels_crossed_in_step = 0
+        fills_in_step = 0
         control = self.make_control(
             price,
             annualized_vol,
             regime=regime,
             size_scale=size_scale,
             spacing_scale=spacing_scale,
+            spacing_pct_override=spacing_pct_override,
             order_notional=order_notional,
             inventory_limit_notional=inventory_limit_notional,
         )
@@ -182,16 +194,19 @@ class GridTradingBot:
             grid_distance = max(control.center_price * control.spacing_pct, price * 1e-6)
             price_change = price - self.last_price
             steps_crossed = int(math.floor(abs(price_change) / grid_distance + 1e-9))
+            grid_levels_crossed_in_step = steps_crossed
+            self.cumulative_grid_levels_crossed += steps_crossed
 
             if steps_crossed > 0:
                 for step in range(1, steps_crossed + 1):
                     if price_change < 0.0:
                         fill_price = max(self.last_price - grid_distance * step, price)
-                        self._buy_on_dip(fill_price, control)
+                        fills_in_step += int(self._buy_on_dip(fill_price, control))
                     else:
                         fill_price = min(self.last_price + grid_distance * step, price)
-                        self._sell_on_rally(fill_price, control)
+                        fills_in_step += int(self._sell_on_rally(fill_price, control))
 
+        self.cumulative_fills += fills_in_step
         self.last_price = price
         gross_notional = abs(self.inventory) * price
         equity = self.cash + self.inventory * price
@@ -207,23 +222,28 @@ class GridTradingBot:
             cash=self.cash,
             realized_pnl=self.realized_pnl,
             equity=equity,
+            active_grid_levels=len(control.buy_levels) + len(control.sell_levels),
+            grid_levels_crossed_in_step=grid_levels_crossed_in_step,
+            fills_in_step=fills_in_step,
+            cumulative_grid_levels_crossed=self.cumulative_grid_levels_crossed,
+            cumulative_fills=self.cumulative_fills,
         )
 
-    def _buy_on_dip(self, fill_price: float, control: GridControl) -> None:
+    def _buy_on_dip(self, fill_price: float, control: GridControl) -> bool:
         long_limit_units = control.long_notional_limit / max(fill_price, 1e-9)
         room = max(long_limit_units - self.inventory, 0.0)
         quantity = min(control.buy_order_notional / max(fill_price, 1e-9), room)
-        self._execute_buy(quantity, fill_price)
+        return self._execute_buy(quantity, fill_price)
 
-    def _sell_on_rally(self, fill_price: float, control: GridControl) -> None:
+    def _sell_on_rally(self, fill_price: float, control: GridControl) -> bool:
         short_limit_units = control.short_notional_limit / max(fill_price, 1e-9)
         room = max(self.inventory + short_limit_units, 0.0)
         quantity = min(control.sell_order_notional / max(fill_price, 1e-9), room)
-        self._execute_sell(quantity, fill_price)
+        return self._execute_sell(quantity, fill_price)
 
-    def _execute_buy(self, quantity: float, price: float) -> None:
+    def _execute_buy(self, quantity: float, price: float) -> bool:
         if quantity <= 0.0:
-            return
+            return False
 
         self.cash -= quantity * price
         if self.inventory < 0.0:
@@ -243,10 +263,11 @@ class GridTradingBot:
             else:
                 self.inventory = quantity
                 self.average_entry_price = price
+        return True
 
-    def _execute_sell(self, quantity: float, price: float) -> None:
+    def _execute_sell(self, quantity: float, price: float) -> bool:
         if quantity <= 0.0:
-            return
+            return False
 
         self.cash += quantity * price
         if self.inventory > 0.0:
@@ -266,6 +287,7 @@ class GridTradingBot:
             else:
                 self.inventory = -quantity
                 self.average_entry_price = price
+        return True
 
     def _annualized_volatility(self, prices: np.ndarray) -> float:
         returns = np.diff(np.log(prices))

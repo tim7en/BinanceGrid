@@ -67,6 +67,29 @@ That command writes:
 
 - `artifacts/plots/market_overview.png`
 - `artifacts/plots/portfolio_overview.png`
+- `artifacts/plots/walkforward_dashboard.png`
+
+The walk-forward dashboard adds the execution analytics for the reinforced rule engine:
+
+- equity curve and drawdown
+- gross exposure
+- active grids and grid crossings
+- fill counts and cumulative fill rate
+- aligned Donchian breakouts and fake breakouts
+
+## Generated Backtest
+
+You can run the full reinforced walk-forward setup on generated market data and track returns explicitly.
+
+```powershell
+python -m binance_grid.generated --years 3 --intraday-bars-per-day 24 --output-dir artifacts/generated
+```
+
+That command writes:
+
+- `artifacts/generated/generated_market_overview.png`
+- `artifacts/generated/generated_walkforward_dashboard.png`
+- `artifacts/generated/generated_returns_summary.txt`
 
 ## Test
 
