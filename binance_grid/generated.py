@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .hedge_mode_artifact import write_hedge_mode_grid_demo
 from .modules.common import MarketBar
 from .modules.portfolio import (
     AssetHistory,
@@ -54,6 +55,7 @@ class GeneratedBacktestArtifacts:
     returns_summary: Path | None = None
     step_trace_csv: Path | None = None
     day_by_day_example_csv: Path | None = None
+    hedge_mode_demo_html: Path | None = None
 
     def as_dict(self) -> dict[str, Path]:
         artifacts: dict[str, Path] = {}
@@ -67,6 +69,8 @@ class GeneratedBacktestArtifacts:
             artifacts["step_trace_csv"] = self.step_trace_csv
         if self.day_by_day_example_csv is not None:
             artifacts["day_by_day_example_csv"] = self.day_by_day_example_csv
+        if self.hedge_mode_demo_html is not None:
+            artifacts["hedge_mode_demo_html"] = self.hedge_mode_demo_html
         return artifacts
 
 
@@ -218,6 +222,7 @@ def run_generated_backtest(
         returns_summary.write_text(_format_returns_summary(analytics), encoding="utf-8")
         step_trace_csv = output_root / "generated_step_trace.csv"
         day_by_day_example_csv = output_root / f"generated_{selected_symbol.lower()}_day_by_day.csv"
+        hedge_mode_demo_html = write_hedge_mode_grid_demo(output_root / "generated_futures_grid_hedge_mode.html")
         _write_step_trace_csv(
             simulation=simulation,
             histories=histories,
@@ -241,6 +246,7 @@ def run_generated_backtest(
             returns_summary=returns_summary,
             step_trace_csv=step_trace_csv,
             day_by_day_example_csv=day_by_day_example_csv,
+            hedge_mode_demo_html=hedge_mode_demo_html,
         )
 
     return GeneratedBacktestResult(

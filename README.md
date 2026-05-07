@@ -100,6 +100,11 @@ That command writes:
 - `artifacts/generated/generated_market_overview.png`
 - `artifacts/generated/generated_walkforward_dashboard.png`
 - `artifacts/generated/generated_returns_summary.txt`
+- `artifacts/generated/generated_step_trace.csv`
+- `artifacts/generated/generated_btc_day_by_day.csv`
+- `artifacts/generated/generated_futures_grid_hedge_mode.html`
+
+Open the generated HTML file in a browser to inspect the interactive hedge-mode ladder with play, pause, single-step, and parameter controls.
 
 ## Test
 

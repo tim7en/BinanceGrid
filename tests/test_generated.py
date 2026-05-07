@@ -66,10 +66,13 @@ class GeneratedBacktestTests(unittest.TestCase):
             assert result.artifacts is not None
             self.assertIsNotNone(result.artifacts.step_trace_csv)
             self.assertIsNotNone(result.artifacts.day_by_day_example_csv)
+            self.assertIsNotNone(result.artifacts.hedge_mode_demo_html)
             assert result.artifacts.step_trace_csv is not None
             assert result.artifacts.day_by_day_example_csv is not None
+            assert result.artifacts.hedge_mode_demo_html is not None
             self.assertTrue(result.artifacts.step_trace_csv.exists())
             self.assertTrue(result.artifacts.day_by_day_example_csv.exists())
+            self.assertTrue(result.artifacts.hedge_mode_demo_html.exists())
 
             with result.artifacts.step_trace_csv.open("r", encoding="utf-8", newline="") as handle:
                 reader = csv.DictReader(handle)
@@ -85,6 +88,11 @@ class GeneratedBacktestTests(unittest.TestCase):
             self.assertGreater(len(rows), 0)
             self.assertTrue(all(row["symbol"] == "BTC" for row in rows))
             self.assertTrue(all(row["session_date"] for row in rows))
+
+            html_text = result.artifacts.hedge_mode_demo_html.read_text(encoding="utf-8")
+            self.assertIn("Hedge Mode Futures Grid Bot", html_text)
+            self.assertIn("Step Forward", html_text)
+            self.assertIn("Trade Log", html_text)
 
 
 if __name__ == "__main__":
