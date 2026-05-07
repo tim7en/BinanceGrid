@@ -8,12 +8,19 @@ from pathlib import Path
 
 import numpy as np
 
-from .analytics import WalkForwardAnalytics, summarize_walkforward_snapshots
-from .coordinator import CoordinatorConfig, CoordinatorSnapshot, MarketFrame, PriceBar, RuleBasedGridCoordinator
+from .modules.common import MarketBar
+from .modules.portfolio import (
+    AssetHistory,
+    MacroHistory,
+    PortfolioManagerConfig,
+    PortfolioManagerSnapshot,
+    PortfolioRiskController,
+    WalkForwardAnalytics,
+    run_walk_forward_backtest,
+    summarize_walkforward_snapshots,
+)
 from .plotting import save_market_overview, save_walkforward_dashboard
 from .simulation import MacroRegime, SimulationResult, simulate_price_paths
-from .strategy import GridTradingBot
-from .walkforward import run_walk_forward_backtest
 
 
 REGIME_VOLUME_MULTIPLIER: dict[MacroRegime, float] = {
@@ -58,8 +65,9 @@ class GeneratedBacktestArtifacts:
 @dataclass(frozen=True)
 class GeneratedBacktestResult:
     simulation: SimulationResult
-    histories: dict[str, MarketFrame]
-    snapshots: list[CoordinatorSnapshot]
+    histories: dict[str, AssetHistory]
+    macro_history: MacroHistory
+    snapshots: list[PortfolioManagerSnapshot]
     analytics: WalkForwardAnalytics
     artifacts: GeneratedBacktestArtifacts | None = None
 
@@ -69,19 +77,19 @@ def build_generated_histories(
     *,
     intraday_bars_per_day: int = 24,
     seed: int | None = 101,
-) -> dict[str, MarketFrame]:
+) -> dict[str, AssetHistory]:
     if intraday_bars_per_day < 2:
         raise ValueError("intraday_bars_per_day must be at least 2")
     if simulation.steps_per_year != 365:
         raise ValueError("generated history adapter expects 365 simulation steps per year")
 
     rng = np.random.default_rng(seed)
-    histories: dict[str, MarketFrame] = {}
+    histories: dict[str, AssetHistory] = {}
     interval = timedelta(seconds=86_400 / (intraday_bars_per_day + 1))
 
     for asset_index, symbol in enumerate(simulation.asset_symbols):
-        daily_bars: list[PriceBar] = []
-        intraday_bars: list[PriceBar] = []
+        daily_bars: list[MarketBar] = []
+        intraday_bars: list[MarketBar] = []
         for step_index, regime in enumerate(simulation.regimes):
             day_open = float(simulation.prices[step_index, asset_index])
             day_close = float(simulation.prices[step_index + 1, asset_index])
@@ -96,7 +104,7 @@ def build_generated_histories(
             base_volume = BASE_DAILY_VOLUME.get(symbol, 5_000.0)
             day_volume = base_volume * regime_volume * (1.0 + min(abs(day_log_return) * 30.0, 3.0))
             daily_bars.append(
-                PriceBar(
+                MarketBar(
                     timestamp=day_timestamp,
                     open=day_open,
                     high=high,
@@ -117,11 +125,49 @@ def build_generated_histories(
                     rng=rng,
                 )
             )
-        histories[symbol] = MarketFrame(
+        histories[symbol] = AssetHistory(
             daily_bars=tuple(daily_bars),
-            five_minute_bars=tuple(intraday_bars),
+            intraday_bars=tuple(intraday_bars),
         )
     return histories
+
+
+def build_generated_macro_history(
+    simulation: SimulationResult,
+    *,
+    seed: int | None = 211,
+) -> MacroHistory:
+    rng = np.random.default_rng(seed)
+    dxy_values: list[float] = []
+    spread_10y2y_values: list[float] = []
+    spread_2y3m_values: list[float] = []
+    vix_values: list[float] = []
+    fear_greed_values: list[float] = []
+
+    profiles = {
+        MacroRegime.EXPANSION: (101.5, 0.85, 0.35, 16.0, 66.0),
+        MacroRegime.RANGE: (103.0, 0.25, 0.10, 21.0, 50.0),
+        MacroRegime.STRESS: (106.0, -0.35, -0.22, 33.0, 24.0),
+        MacroRegime.MANIA: (100.5, 0.45, 0.15, 18.0, 80.0),
+    }
+    previous = profiles[simulation.regimes[0]]
+    for regime in simulation.regimes:
+        target = profiles[regime]
+        smoothed = tuple((0.65 * previous[index]) + (0.35 * target[index]) for index in range(len(target)))
+        previous = smoothed
+        dxy_values.append(float(smoothed[0] + rng.normal(0.0, 0.25)))
+        spread_10y2y_values.append(float(smoothed[1] + rng.normal(0.0, 0.03)))
+        spread_2y3m_values.append(float(smoothed[2] + rng.normal(0.0, 0.03)))
+        vix_values.append(float(max(smoothed[3] + rng.normal(0.0, 0.8), 10.0)))
+        fear_greed_values.append(float(np.clip(smoothed[4] + rng.normal(0.0, 3.0), 0.0, 100.0)))
+
+    return MacroHistory(
+        dxy_values=tuple(dxy_values),
+        spread_10y2y_values=tuple(spread_10y2y_values),
+        spread_2y3m_values=tuple(spread_2y3m_values),
+        vix_values=tuple(vix_values),
+        fear_greed_values=tuple(fear_greed_values),
+    )
 
 
 def run_generated_backtest(
@@ -131,7 +177,7 @@ def run_generated_backtest(
     intraday_seed: int = 121,
     intraday_bars_per_day: int = 24,
     output_dir: str | Path | None = None,
-    coordinator_config: CoordinatorConfig | None = None,
+    portfolio_config: PortfolioManagerConfig | None = None,
 ) -> GeneratedBacktestResult:
     simulation = simulate_price_paths(years=years, steps_per_year=365, seed=seed)
     histories = build_generated_histories(
@@ -139,11 +185,15 @@ def run_generated_backtest(
         intraday_bars_per_day=intraday_bars_per_day,
         seed=intraday_seed,
     )
-    coordinator = RuleBasedGridCoordinator(
-        {symbol: GridTradingBot(symbol) for symbol in histories},
-        coordinator_config or CoordinatorConfig(),
+    macro_history = build_generated_macro_history(
+        simulation,
+        seed=intraday_seed + 17,
     )
-    snapshots = run_walk_forward_backtest(coordinator, histories)
+    controller = PortfolioRiskController(
+        simulation.asset_symbols,
+        portfolio_config or PortfolioManagerConfig(total_capital=100_000.0),
+    )
+    snapshots = run_walk_forward_backtest(controller, histories, macro_history)
     analytics = summarize_walkforward_snapshots(snapshots)
 
     artifacts: GeneratedBacktestArtifacts | None = None
@@ -163,6 +213,7 @@ def run_generated_backtest(
     return GeneratedBacktestResult(
         simulation=simulation,
         histories=histories,
+        macro_history=macro_history,
         snapshots=snapshots,
         analytics=analytics,
         artifacts=artifacts,
@@ -179,7 +230,7 @@ def _build_intraday_bars(
     day_volume: float,
     interval: timedelta,
     rng: np.random.Generator,
-) -> list[PriceBar]:
+) -> list[MarketBar]:
     target_log_return = math.log(day_close / max(day_open, 1e-9))
     noise_scale = REGIME_INTRADAY_NOISE[regime] + (abs(target_log_return) / max(intraday_bars_per_day, 1)) * 2.5
     raw_increments = rng.normal(0.0, noise_scale, size=intraday_bars_per_day)
@@ -188,7 +239,7 @@ def _build_intraday_bars(
     closes = np.exp(log_prices)
     session_start = day_timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    bars: list[PriceBar] = []
+    bars: list[MarketBar] = []
     previous_close = day_open
     for index, close in enumerate(closes):
         wiggle = max(abs(float(increments[index])) * 0.85, 0.0004)
@@ -200,7 +251,7 @@ def _build_intraday_bars(
         noisy_scale = max(0.35, 1.0 + (0.08 * rng.standard_normal()))
         volume = max(day_volume / intraday_bars_per_day * time_weight * move_weight * noisy_scale, 1.0)
         bars.append(
-            PriceBar(
+            MarketBar(
                 timestamp=session_start + interval * (index + 1),
                 open=previous_close,
                 high=high,
