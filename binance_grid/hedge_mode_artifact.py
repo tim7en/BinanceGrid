@@ -997,8 +997,7 @@ def render_hedge_mode_grid_demo_html() -> str:
       }
 
       function setMode(mode, shouldReset = true) {
-        const nextMode = modeProfile(mode).label === undefined ? defaults.mode : mode;
-        state.selectedMode = modeProfiles[nextMode] ? nextMode : defaults.mode;
+        state.selectedMode = modeProfiles[mode] ? mode : defaults.mode;
         ui.modeLongButton.classList.toggle('active', state.selectedMode === 'long');
         ui.modeNeutralButton.classList.toggle('active', state.selectedMode === 'neutral');
         ui.modeShortButton.classList.toggle('active', state.selectedMode === 'short');
@@ -1026,7 +1025,7 @@ def render_hedge_mode_grid_demo_html() -> str:
         const sellLevelCount = Math.max(2, config.gridCount + profile.sellLevelsDelta);
 
         for (let step = 1; step <= sellLevelCount; step += 1) {
-          const upper = round(config.centerPrice + (spacingValue * step));
+          const upper = round(effectiveCenter + (spacingValue * step));
           tradeUpper.push(upper);
           displayLevels.push(upper);
         }

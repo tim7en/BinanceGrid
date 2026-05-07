@@ -93,6 +93,9 @@ class GeneratedBacktestTests(unittest.TestCase):
             self.assertIn("Hedge Mode Futures Grid Bot", html_text)
             self.assertIn("Step Forward", html_text)
             self.assertIn("Trade Log", html_text)
+            self.assertIn("Long mode", html_text)
+            self.assertIn("Neutral mode", html_text)
+            self.assertIn("Short mode", html_text)
 
 
 if __name__ == "__main__":

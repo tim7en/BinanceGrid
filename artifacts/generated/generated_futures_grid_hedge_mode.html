@@ -352,6 +352,52 @@
       background: linear-gradient(180deg, rgba(28, 73, 96, 0.86), rgba(16, 45, 61, 0.94));
     }
 
+    .mode-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .mode-label {
+      color: var(--muted);
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      white-space: nowrap;
+    }
+
+    .mode-toggle {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .mode-button {
+      min-width: 126px;
+    }
+
+    .mode-button.active.neutral,
+    .mode-badge.neutral {
+      border-color: rgba(105, 212, 255, 0.34);
+      background: rgba(105, 212, 255, 0.1);
+      color: var(--accent);
+    }
+
+    .mode-button.active.long,
+    .mode-badge.long {
+      border-color: rgba(65, 220, 145, 0.34);
+      background: rgba(65, 220, 145, 0.1);
+      color: var(--long);
+    }
+
+    .mode-button.active.short,
+    .mode-badge.short {
+      border-color: rgba(255, 145, 107, 0.34);
+      background: rgba(255, 145, 107, 0.1);
+      color: var(--short);
+    }
+
     .speed-group,
     .field {
       display: grid;
@@ -602,6 +648,7 @@
             <p class="panel-copy">Short entries live above the center line, long entries live below it. Each crossing fills that side and looks for the nearest open opposite leg that has cleared the take-profit threshold.</p>
           </div>
           <div class="panel-badges">
+            <span id="modeBadge" class="badge mode-badge neutral">Neutral mode</span>
             <span id="runStatus" class="badge">Paused</span>
             <span id="tickCounter" class="badge">Tick 000 / 000</span>
           </div>
@@ -704,6 +751,17 @@
         </label>
       </div>
 
+      <div class="controls-row">
+        <div class="mode-group" role="group" aria-label="Grid bias mode">
+          <span class="mode-label">Mode</span>
+          <div class="mode-toggle">
+            <button id="modeLongButton" class="control-button mode-button long" type="button">Long mode</button>
+            <button id="modeNeutralButton" class="control-button mode-button neutral" type="button">Neutral mode</button>
+            <button id="modeShortButton" class="control-button mode-button short" type="button">Short mode</button>
+          </div>
+        </div>
+      </div>
+
       <div class="inputs-grid">
         <label class="field" for="centerPriceInput">
           <span>Center price</span>
@@ -727,7 +785,7 @@
         </label>
       </div>
 
-      <div class="controls-footnote">Step Forward advances exactly one synthetic price tick. Play uses the same crossing logic, just driven by the speed slider.</div>
+      <div class="controls-footnote">Step Forward advances exactly one synthetic price tick. Switching between long, neutral, and short mode rebuilds the ladder with the same bias rules the repo uses: long adds more lower grids, short adds more upper grids, neutral keeps both sides symmetric.</div>
     </section>
   </div>
 
@@ -745,6 +803,7 @@
       };
 
       const ui = {
+        modeBadge: document.getElementById('modeBadge'),
         runStatus: document.getElementById('runStatus'),
         tickCounter: document.getElementById('tickCounter'),
         openLongCount: document.getElementById('openLongCount'),
@@ -761,6 +820,9 @@
         pauseButton: document.getElementById('pauseButton'),
         stepButton: document.getElementById('stepButton'),
         resetButton: document.getElementById('resetButton'),
+        modeLongButton: document.getElementById('modeLongButton'),
+        modeNeutralButton: document.getElementById('modeNeutralButton'),
+        modeShortButton: document.getElementById('modeShortButton'),
         speedSlider: document.getElementById('speedSlider'),
         speedValue: document.getElementById('speedValue'),
         centerPriceInput: document.getElementById('centerPriceInput'),
@@ -788,11 +850,40 @@
         gridCount: 6,
         orderSize: 1,
         takeProfitPct: 0.45,
+        mode: 'neutral',
         speed: 6,
+      };
+
+      const modeProfiles = {
+        long: {
+          label: 'Long mode',
+          centerShift: -1,
+          buyLevelsDelta: 2,
+          sellLevelsDelta: -2,
+          buyMultiplier: 1.25,
+          sellMultiplier: 0.85,
+        },
+        neutral: {
+          label: 'Neutral mode',
+          centerShift: 0,
+          buyLevelsDelta: 0,
+          sellLevelsDelta: 0,
+          buyMultiplier: 1,
+          sellMultiplier: 1,
+        },
+        short: {
+          label: 'Short mode',
+          centerShift: 1,
+          buyLevelsDelta: -2,
+          sellLevelsDelta: 2,
+          buyMultiplier: 0.85,
+          sellMultiplier: 1.25,
+        },
       };
 
       const state = {
         config: { ...defaults },
+        selectedMode: defaults.mode,
         levels: null,
         series: [],
         yDomain: { min: 0, max: 1 },
@@ -873,6 +964,10 @@
         return Math.max(minimum, Math.min(maximum, parsed));
       }
 
+      function modeProfile(mode) {
+        return modeProfiles[mode] ?? modeProfiles.neutral;
+      }
+
       function readConfig() {
         const config = {
           centerPrice: positiveNumber(ui.centerPriceInput.value, defaults.centerPrice, 1),
@@ -880,6 +975,7 @@
           gridCount: boundedInteger(ui.gridCountInput.value, defaults.gridCount, 1, 12),
           orderSize: positiveNumber(ui.orderSizeInput.value, defaults.orderSize, 0.1),
           takeProfitPct: positiveNumber(ui.takeProfitInput.value, defaults.takeProfitPct, 0),
+          mode: state.selectedMode,
           speed: boundedInteger(ui.speedSlider.value, defaults.speed, 1, 24),
         };
 
@@ -894,21 +990,42 @@
         return config;
       }
 
+      function setMode(mode, shouldReset = true) {
+        state.selectedMode = modeProfiles[mode] ? mode : defaults.mode;
+        ui.modeLongButton.classList.toggle('active', state.selectedMode === 'long');
+        ui.modeNeutralButton.classList.toggle('active', state.selectedMode === 'neutral');
+        ui.modeShortButton.classList.toggle('active', state.selectedMode === 'short');
+        ui.modeBadge.textContent = modeProfile(state.selectedMode).label;
+        ui.modeBadge.className = `badge mode-badge ${state.selectedMode}`;
+        if (shouldReset) {
+          resetSimulation();
+        }
+      }
+
       function levelKey(level) {
         return level.toFixed(4);
       }
 
       function buildLevels(config) {
-        const displayLevels = [round(config.centerPrice)];
+        const profile = modeProfile(config.mode);
+        const spacingPct = config.gridSpacingPct / 100;
+        const biasShift = 0.45 * spacingPct * profile.centerShift;
+        const effectiveCenter = round(config.centerPrice * (1 + biasShift));
+        const displayLevels = [effectiveCenter];
         const tradeUpper = [];
         const tradeLower = [];
-        const spacingValue = config.centerPrice * config.gridSpacingPct / 100;
+        const spacingValue = effectiveCenter * spacingPct;
+        const buyLevelCount = Math.max(2, config.gridCount + profile.buyLevelsDelta);
+        const sellLevelCount = Math.max(2, config.gridCount + profile.sellLevelsDelta);
 
-        for (let step = 1; step <= config.gridCount; step += 1) {
-          const upper = round(config.centerPrice + (spacingValue * step));
-          const lower = round(config.centerPrice - (spacingValue * step));
+        for (let step = 1; step <= sellLevelCount; step += 1) {
+          const upper = round(effectiveCenter + (spacingValue * step));
           tradeUpper.push(upper);
           displayLevels.push(upper);
+        }
+
+        for (let step = 1; step <= buyLevelCount; step += 1) {
+          const lower = round(effectiveCenter - (spacingValue * step));
           if (lower > 0) {
             tradeLower.push(lower);
             displayLevels.push(lower);
@@ -920,7 +1037,7 @@
         tradeLower.sort((left, right) => left - right);
 
         return {
-          center: round(config.centerPrice),
+          center: effectiveCenter,
           display: displayLevels,
           tradeUpper,
           tradeLower,
@@ -1041,12 +1158,17 @@
         return `${x},${y + size} ${x - size},${y - size} ${x + size},${y - size}`;
       }
 
+      function totalPositionSize(positions) {
+        return positions.reduce((sum, position) => sum + position.size, 0);
+      }
+
       function averageEntry(positions) {
-        if (positions.length === 0) {
+        const totalSize = totalPositionSize(positions);
+        if (totalSize === 0) {
           return 0;
         }
-        const total = positions.reduce((sum, position) => sum + position.entry, 0);
-        return total / positions.length;
+        const total = positions.reduce((sum, position) => sum + (position.entry * position.size), 0);
+        return total / totalSize;
       }
 
       function unrealizedPnl(markPrice) {
@@ -1090,13 +1212,13 @@
         state.config.speed = speed;
       }
 
-      function registerPosition(side, entryPrice, tickIndex) {
+      function registerPosition(side, entryPrice, tickIndex, size) {
         return {
           id: state.nextPositionId,
           side,
           entry: entryPrice,
           openedAt: tickIndex,
-          size: state.config.orderSize,
+          size,
         };
       }
 
@@ -1155,11 +1277,12 @@
       }
 
       function processLevelCross(level, direction, tickIndex) {
+        const profile = modeProfile(state.config.mode);
         let closedPosition = null;
         let realized = 0;
 
         if (direction === 'up') {
-          const shortPosition = registerPosition('short', level, tickIndex);
+          const shortPosition = registerPosition('short', level, tickIndex, state.config.orderSize * profile.sellMultiplier);
           state.nextPositionId += 1;
           state.shorts.push(shortPosition);
           state.totalTrades += 1;
@@ -1173,7 +1296,7 @@
         }
 
         if (direction === 'down') {
-          const longPosition = registerPosition('long', level, tickIndex);
+          const longPosition = registerPosition('long', level, tickIndex, state.config.orderSize * profile.buyMultiplier);
           state.nextPositionId += 1;
           state.longs.push(longPosition);
           state.totalTrades += 1;
@@ -1237,14 +1360,16 @@
       function renderStats() {
         const displayPrice = currentDisplayPrice();
         const unrealized = unrealizedPnl(displayPrice);
+        const longQuantity = totalPositionSize(state.longs);
+        const shortQuantity = totalPositionSize(state.shorts);
         ui.openLongCount.textContent = String(state.longs.length);
         ui.openLongMeta.textContent = state.longs.length === 0
           ? 'flat'
-          : `qty ${formatPrice(state.longs.length * state.config.orderSize)} | avg ${formatPrice(averageEntry(state.longs))}`;
+          : `qty ${formatPrice(longQuantity)} | avg ${formatPrice(averageEntry(state.longs))}`;
         ui.openShortCount.textContent = String(state.shorts.length);
         ui.openShortMeta.textContent = state.shorts.length === 0
           ? 'flat'
-          : `qty ${formatPrice(state.shorts.length * state.config.orderSize)} | avg ${formatPrice(averageEntry(state.shorts))}`;
+          : `qty ${formatPrice(shortQuantity)} | avg ${formatPrice(averageEntry(state.shorts))}`;
         ui.realizedPnl.textContent = formatSignedCurrency(state.realizedPnl);
         ui.unrealizedPnl.textContent = formatSignedCurrency(unrealized);
         setValueTone(ui.realizedPnl, state.realizedPnl);
@@ -1470,11 +1595,24 @@
         resetSimulation();
       });
 
+      ui.modeLongButton.addEventListener('click', () => {
+        setMode('long');
+      });
+
+      ui.modeNeutralButton.addEventListener('click', () => {
+        setMode('neutral');
+      });
+
+      ui.modeShortButton.addEventListener('click', () => {
+        setMode('short');
+      });
+
       ui.speedSlider.addEventListener('input', () => {
         syncSpeedLabel();
       });
 
       setDefaults();
+      setMode(defaults.mode, false);
       syncSpeedLabel();
       resetSimulation();
       requestAnimationFrame(animationFrame);
