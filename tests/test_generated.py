@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
+from tempfile import TemporaryDirectory
 import sys
 import unittest
 
@@ -48,6 +50,41 @@ class GeneratedBacktestTests(unittest.TestCase):
         )
         self.assertTrue(result.analytics.annualized_return == result.analytics.annualized_return)
         self.assertLessEqual(result.analytics.max_drawdown, 0.0)
+
+    def test_generated_backtest_writes_trace_and_daily_example_csvs(self) -> None:
+        with TemporaryDirectory() as output_dir:
+            result = run_generated_backtest(
+                years=1,
+                seed=19,
+                intraday_seed=23,
+                intraday_bars_per_day=8,
+                output_dir=output_dir,
+                example_symbol="BTC",
+            )
+
+            self.assertIsNotNone(result.artifacts)
+            assert result.artifacts is not None
+            self.assertIsNotNone(result.artifacts.step_trace_csv)
+            self.assertIsNotNone(result.artifacts.day_by_day_example_csv)
+            assert result.artifacts.step_trace_csv is not None
+            assert result.artifacts.day_by_day_example_csv is not None
+            self.assertTrue(result.artifacts.step_trace_csv.exists())
+            self.assertTrue(result.artifacts.day_by_day_example_csv.exists())
+
+            with result.artifacts.step_trace_csv.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                first_row = next(reader)
+            self.assertEqual(first_row["symbol"], "BTC")
+            self.assertIn(first_row["macro_regime"], {"risk_on", "neutral", "risk_off"})
+            self.assertIn("portfolio_drawdown", first_row)
+            self.assertIn("grid_count", first_row)
+
+            with result.artifacts.day_by_day_example_csv.open("r", encoding="utf-8", newline="") as handle:
+                reader = csv.DictReader(handle)
+                rows = list(reader)
+            self.assertGreater(len(rows), 0)
+            self.assertTrue(all(row["symbol"] == "BTC" for row in rows))
+            self.assertTrue(all(row["session_date"] for row in rows))
 
 
 if __name__ == "__main__":
