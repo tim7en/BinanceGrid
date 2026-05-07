@@ -229,6 +229,8 @@ def _format_time_axis(axis: plt.Axes, timestamps: Sequence) -> None:
         formatter = mdates.ConciseDateFormatter(locator)
         axis.xaxis.set_major_locator(locator)
         axis.xaxis.set_major_formatter(formatter)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate plots for the Binance Grid research toolkit.")
     parser.add_argument("--output-dir", default="artifacts/plots", help="Directory where PNG plots will be written.")

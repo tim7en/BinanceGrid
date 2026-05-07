@@ -1,4 +1,3 @@
-from .generated import GeneratedBacktestArtifacts, GeneratedBacktestResult, build_generated_histories, build_generated_macro_history, run_generated_backtest
 from .modules.bot import (
     BotStatus,
     GridBias,
@@ -36,6 +35,22 @@ from .simulation import (
     default_market_configuration,
     simulate_price_paths,
 )
+
+_GENERATED_EXPORTS = {
+    "GeneratedBacktestArtifacts",
+    "GeneratedBacktestResult",
+    "build_generated_histories",
+    "build_generated_macro_history",
+    "run_generated_backtest",
+}
+
+
+def __getattr__(name: str):
+    if name in _GENERATED_EXPORTS:
+        from . import generated as generated_module
+
+        return getattr(generated_module, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
     "AssetHistory",
