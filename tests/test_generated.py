@@ -96,6 +96,7 @@ class GeneratedBacktestTests(unittest.TestCase):
             self.assertIn("Long mode", html_text)
             self.assertIn("Neutral mode", html_text)
             self.assertIn("Short mode", html_text)
+            self.assertIn("Trailing mode", html_text)
 
 
 if __name__ == "__main__":

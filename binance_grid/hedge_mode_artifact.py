@@ -404,6 +404,13 @@ def render_hedge_mode_grid_demo_html() -> str:
       color: var(--short);
     }
 
+    .mode-button.active.trailing,
+    .mode-badge.trailing {
+      border-color: rgba(255, 208, 102, 0.34);
+      background: rgba(255, 208, 102, 0.1);
+      color: #ffd066;
+    }
+
     .speed-group,
     .field {
       display: grid;
@@ -764,6 +771,7 @@ def render_hedge_mode_grid_demo_html() -> str:
             <button id="modeLongButton" class="control-button mode-button long" type="button">Long mode</button>
             <button id="modeNeutralButton" class="control-button mode-button neutral" type="button">Neutral mode</button>
             <button id="modeShortButton" class="control-button mode-button short" type="button">Short mode</button>
+            <button id="modeTrailingButton" class="control-button mode-button trailing" type="button">Trailing mode</button>
           </div>
         </div>
       </div>
@@ -791,7 +799,7 @@ def render_hedge_mode_grid_demo_html() -> str:
         </label>
       </div>
 
-      <div class="controls-footnote">Step Forward advances exactly one synthetic price tick. Switching between long, neutral, and short mode rebuilds the ladder with the same bias rules the repo uses: long adds more lower grids, short adds more upper grids, neutral keeps both sides symmetric.</div>
+      <div class="controls-footnote">Step Forward advances exactly one synthetic price tick. Switching between long, neutral, short, and trailing mode rebuilds the ladder with the same bias rules the repo uses: long adds more lower grids, short adds more upper grids, neutral keeps both sides symmetric, and trailing slides the whole ladder forward once price clears a full grid interval.</div>
     </section>
   </div>
 
@@ -829,6 +837,7 @@ def render_hedge_mode_grid_demo_html() -> str:
         modeLongButton: document.getElementById('modeLongButton'),
         modeNeutralButton: document.getElementById('modeNeutralButton'),
         modeShortButton: document.getElementById('modeShortButton'),
+        modeTrailingButton: document.getElementById('modeTrailingButton'),
         speedSlider: document.getElementById('speedSlider'),
         speedValue: document.getElementById('speedValue'),
         centerPriceInput: document.getElementById('centerPriceInput'),
@@ -884,6 +893,15 @@ def render_hedge_mode_grid_demo_html() -> str:
           sellLevelsDelta: 2,
           buyMultiplier: 0.85,
           sellMultiplier: 1.25,
+        },
+        trailing: {
+          label: 'Trailing mode',
+          centerShift: 0,
+          buyLevelsDelta: 0,
+          sellLevelsDelta: 0,
+          buyMultiplier: 1,
+          sellMultiplier: 1,
+          trailing: true,
         },
       };
 
@@ -1001,6 +1019,7 @@ def render_hedge_mode_grid_demo_html() -> str:
         ui.modeLongButton.classList.toggle('active', state.selectedMode === 'long');
         ui.modeNeutralButton.classList.toggle('active', state.selectedMode === 'neutral');
         ui.modeShortButton.classList.toggle('active', state.selectedMode === 'short');
+        ui.modeTrailingButton.classList.toggle('active', state.selectedMode === 'trailing');
         ui.modeBadge.textContent = modeProfile(state.selectedMode).label;
         ui.modeBadge.className = `badge mode-badge ${state.selectedMode}`;
         if (shouldReset) {
@@ -1012,11 +1031,13 @@ def render_hedge_mode_grid_demo_html() -> str:
         return level.toFixed(4);
       }
 
-      function buildLevels(config) {
+      function buildLevels(config, centerOverride = null) {
         const profile = modeProfile(config.mode);
         const spacingPct = config.gridSpacingPct / 100;
         const biasShift = 0.45 * spacingPct * profile.centerShift;
-        const effectiveCenter = round(config.centerPrice * (1 + biasShift));
+        const effectiveCenter = centerOverride === null
+          ? round(config.centerPrice * (1 + biasShift))
+          : round(centerOverride);
         const displayLevels = [effectiveCenter];
         const tradeUpper = [];
         const tradeLower = [];
@@ -1328,6 +1349,34 @@ def render_hedge_mode_grid_demo_html() -> str:
         appendLog(message, direction);
       }
 
+      function maybeTrailGrid(markPrice, tickIndex) {
+        const profile = modeProfile(state.config.mode);
+        if (!profile.trailing) {
+          return;
+        }
+
+        const spacingValue = state.levels.center * state.config.gridSpacingPct / 100;
+        if (spacingValue <= 0) {
+          return;
+        }
+
+        const offset = markPrice - state.levels.center;
+        const stepCount = Math.floor(Math.abs(offset) / spacingValue);
+        if (stepCount < 1) {
+          return;
+        }
+
+        const direction = offset > 0 ? 1 : -1;
+        const nextCenter = round(state.levels.center + (direction * spacingValue * stepCount));
+        if (Math.abs(nextCenter - state.levels.center) < 0.0001) {
+          return;
+        }
+
+        state.levels = buildLevels(state.config, nextCenter);
+        state.yDomain = computeYDomain(state.series, state.levels.display);
+        appendLog(`${formatTime(tickIndex)} - TRAILING grid recentered to ${formatPrice(nextCenter)}`, direction > 0 ? 'up' : 'down');
+      }
+
       function crossedTradeLevels(previousPrice, nextPrice) {
         if (nextPrice > previousPrice) {
           return state.levels.tradeUpper.filter((level) => previousPrice < level && level <= nextPrice);
@@ -1356,6 +1405,8 @@ def render_hedge_mode_grid_demo_html() -> str:
             processLevelCross(level, direction, state.currentIndex);
           });
         }
+
+        maybeTrailGrid(nextPrice, state.currentIndex);
 
         if (state.currentIndex >= state.series.length - 1) {
           state.isPlaying = false;
@@ -1611,6 +1662,10 @@ def render_hedge_mode_grid_demo_html() -> str:
 
       ui.modeShortButton.addEventListener('click', () => {
         setMode('short');
+      });
+
+      ui.modeTrailingButton.addEventListener('click', () => {
+        setMode('trailing');
       });
 
       ui.speedSlider.addEventListener('input', () => {
