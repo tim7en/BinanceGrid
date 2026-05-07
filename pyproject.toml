@@ -9,6 +9,7 @@ description = "Regime-aware multi-asset grid trading research toolkit"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "matplotlib>=3.8",
   "numpy>=1.26",
 ]
 

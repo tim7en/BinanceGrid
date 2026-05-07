@@ -55,6 +55,19 @@ print(market.timestamps[:3])
 print(market.prices[:3])
 ```
 
+## Plotting
+
+The package includes a headless plotting module that saves PNG files for the synthetic market and the managed portfolio.
+
+```powershell
+python -m binance_grid.plotting --output-dir artifacts/plots
+```
+
+That command writes:
+
+- `artifacts/plots/market_overview.png`
+- `artifacts/plots/portfolio_overview.png`
+
 ## Test
 
 ```powershell
