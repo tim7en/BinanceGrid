@@ -8,6 +8,16 @@ It includes three core parts:
 - a three-state grid bot with `long`, `neutral`, and `short` operating modes
 - a portfolio manager that coordinates multiple grid bots and overrides spacing, notional, and inventory limits from portfolio risk
 
+## Foldered Architecture
+
+The project now also exposes a foldered module layout for the workflow you described:
+
+- `binance_grid/modules/indicators`: VWAP, 50d/200d trend regime, 5m Donchian 50 and 10, 5m volume 200/50 expansion-compression
+- `binance_grid/modules/macro_regime`: DXY, curve, VIX, and crypto fear-greed scoring into a macro risk state
+- `binance_grid/modules/risk_control`: ATR-sized grid ranges, 30% initial deployment, 70% reserve, grid count from 200-bar volatility, leverage from x2 to x5
+- `binance_grid/modules/bot`: one-asset grid bot with daily 30/70 profit split, macro-change flatten and pause, and 50% loss pause for 10 days
+- `binance_grid/modules/portfolio`: multi-asset manager that supervises multiple one-asset bots and tracks portfolio equity
+
 ## Market Model
 
 The simulator creates daily price paths for four assets with distinct drift and volatility signatures:

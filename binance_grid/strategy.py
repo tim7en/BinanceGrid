@@ -229,6 +229,19 @@ class GridTradingBot:
             cumulative_fills=self.cumulative_fills,
         )
 
+    def seed_position(self, *, direction: GridBias, notional: float, price: float) -> None:
+        quantity = notional / max(price, 1e-9)
+        if direction == GridBias.LONG:
+            self._execute_buy(quantity, price)
+        elif direction == GridBias.SHORT:
+            self._execute_sell(quantity, price)
+
+    def close_all(self, price: float) -> None:
+        if self.inventory > 0.0:
+            self._execute_sell(self.inventory, price)
+        elif self.inventory < 0.0:
+            self._execute_buy(abs(self.inventory), price)
+
     def _buy_on_dip(self, fill_price: float, control: GridControl) -> bool:
         long_limit_units = control.long_notional_limit / max(fill_price, 1e-9)
         room = max(long_limit_units - self.inventory, 0.0)
