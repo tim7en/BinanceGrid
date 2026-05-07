@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Mapping
 
 from ..bot import SingleAssetBotConfig, SingleAssetBotSnapshot, SingleAssetGridBot, SingleAssetInput
@@ -13,8 +14,10 @@ class PortfolioManagerConfig:
 
 @dataclass(frozen=True)
 class PortfolioManagerSnapshot:
+    timestamp: datetime | None
     total_equity: float
     total_savings: float
+    gross_exposure: float
     asset_snapshots: dict[str, SingleAssetBotSnapshot]
 
 
@@ -44,8 +47,15 @@ class PortfolioRiskController:
         }
         total_equity = sum(snapshot.total_equity for snapshot in snapshots.values())
         total_savings = sum(snapshot.savings_balance for snapshot in snapshots.values())
+        gross_exposure = sum(snapshot.gross_notional for snapshot in snapshots.values()) / max(total_equity, 1e-9)
+        timestamp = max(
+            (snapshot.timestamp for snapshot in snapshots.values()),
+            key=lambda value: value or datetime.min,
+        )
         return PortfolioManagerSnapshot(
+            timestamp=timestamp,
             total_equity=total_equity,
             total_savings=total_savings,
+            gross_exposure=gross_exposure,
             asset_snapshots=snapshots,
         )

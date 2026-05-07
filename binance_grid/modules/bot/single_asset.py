@@ -3,14 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
-import math
-from typing import Sequence
 
-from ...strategy import GridBias, GridTradingBot
 from ..common import MarketBar
 from ..indicators import IndicatorSnapshot, TrendRegime, build_indicator_snapshot
 from ..macro_regime import MacroRegimeState, MacroRiskRegime, assess_macro_regime
 from ..risk_control import GridRiskPlan, build_grid_risk_plan
+from .execution import GridBias, GridExecutionBot, GridExecutionSnapshot
 
 
 class BotStatus(StrEnum):
@@ -56,6 +54,16 @@ class SingleAssetBotSnapshot:
     grid_lower: float | None
     grid_upper: float | None
     grid_count: int
+    active_grid_levels: int
+    grid_levels_crossed_in_step: int
+    fills_in_step: int
+    cumulative_grid_levels_crossed: int
+    cumulative_fills: int
+    gross_notional: float
+    breakout_triggered: bool
+    fake_breakout_triggered: bool
+    cumulative_fake_breakouts: int
+    active_breakout: GridBias
     inventory: float
     realized_pnl: float
     indicator_snapshot: IndicatorSnapshot
@@ -72,9 +80,12 @@ class SingleAssetGridBot:
         self.config = config
         self.working_capital = config.allocated_capital
         self.savings_balance = 0.0
-        self.execution_bot = GridTradingBot(symbol)
+        self.execution_bot = GridExecutionBot(symbol)
         self.current_plan: GridRiskPlan | None = None
-        self.active_macro_regime: str | None = None
+        self.active_macro_regime: MacroRiskRegime | None = None
+        self.active_breakout = GridBias.NEUTRAL
+        self.fake_breakout_count = 0
+        self.fake_breakout_recorded = False
         self.pause_until: datetime | None = None
         self.last_settlement_date = None
         self.daily_realized_profit = 0.0
@@ -100,6 +111,8 @@ class SingleAssetGridBot:
             market_input.vix_values,
             market_input.fear_greed_values,
         )
+        breakout_triggered, fake_breakout_triggered = self._update_breakout_state(indicator_snapshot, current_price)
+        effective_bias = self.active_breakout if self.active_breakout != GridBias.NEUTRAL else _grid_bias_from_trend(indicator_snapshot.trend.regime)
 
         if self.pause_until is not None and timestamp is not None and timestamp < self.pause_until:
             return self._build_snapshot(
@@ -109,6 +122,9 @@ class SingleAssetGridBot:
                 current_price=current_price,
                 indicator_snapshot=indicator_snapshot,
                 macro_state=macro_state,
+                execution_snapshot=None,
+                breakout_triggered=breakout_triggered,
+                fake_breakout_triggered=fake_breakout_triggered,
             )
 
         if self.active_macro_regime is not None and macro_state.regime != self.active_macro_regime:
@@ -124,6 +140,9 @@ class SingleAssetGridBot:
                 current_price=current_price,
                 indicator_snapshot=indicator_snapshot,
                 macro_state=macro_state,
+                execution_snapshot=None,
+                breakout_triggered=breakout_triggered,
+                fake_breakout_triggered=fake_breakout_triggered,
             )
 
         self.active_macro_regime = macro_state.regime
@@ -139,7 +158,7 @@ class SingleAssetGridBot:
                 allocated_capital=self.working_capital,
             )
             if abs(self.execution_bot.inventory) < 1e-12:
-                direction = _grid_bias_from_trend(indicator_snapshot.trend.regime)
+                direction = effective_bias
                 if direction != GridBias.NEUTRAL:
                     self.execution_bot.seed_position(
                         direction=direction,
@@ -147,19 +166,17 @@ class SingleAssetGridBot:
                         price=current_price,
                     )
 
-        annualized_volatility = max(self.current_plan.realized_volatility_200 * math.sqrt(365 * 24 * 12), 0.05)
-        bot_snapshot = self.execution_bot.step(
+        execution_snapshot = self.execution_bot.step(
             timestamp,
-            current_price,
-            annualized_volatility,
-            regime=_grid_bias_from_trend(indicator_snapshot.trend.regime),
-            spacing_pct_override=self.current_plan.level_spacing / max(current_price, 1e-9),
+            price=current_price,
+            spacing_pct=self.current_plan.level_spacing / max(current_price, 1e-9),
+            regime=effective_bias,
             order_notional=self.current_plan.order_notional,
             inventory_limit_notional=self.current_plan.total_grid_notional,
         )
         self._capture_realized_delta()
 
-        if bot_snapshot.equity <= -(self.working_capital * self.config.max_loss_fraction):
+        if execution_snapshot.equity <= -(self.working_capital * self.config.max_loss_fraction):
             self.execution_bot.close_all(current_price)
             self._capture_realized_delta()
             self.current_plan = None
@@ -171,6 +188,9 @@ class SingleAssetGridBot:
                 current_price=current_price,
                 indicator_snapshot=indicator_snapshot,
                 macro_state=macro_state,
+                execution_snapshot=None,
+                breakout_triggered=breakout_triggered,
+                fake_breakout_triggered=fake_breakout_triggered,
             )
 
         return self._build_snapshot(
@@ -180,7 +200,30 @@ class SingleAssetGridBot:
             current_price=current_price,
             indicator_snapshot=indicator_snapshot,
             macro_state=macro_state,
+            execution_snapshot=execution_snapshot,
+            breakout_triggered=breakout_triggered,
+            fake_breakout_triggered=fake_breakout_triggered,
         )
+
+    def _update_breakout_state(self, indicator_snapshot: IndicatorSnapshot, current_price: float) -> tuple[bool, bool]:
+        breakout_triggered = False
+        fake_breakout_triggered = False
+        aligned_breakout = _aligned_breakout(indicator_snapshot)
+        if aligned_breakout != GridBias.NEUTRAL and aligned_breakout != self.active_breakout:
+            self.active_breakout = aligned_breakout
+            self.fake_breakout_recorded = False
+            breakout_triggered = True
+
+        if self.active_breakout == GridBias.LONG and current_price <= indicator_snapshot.slow_donchian.upper and not self.fake_breakout_recorded:
+            self.fake_breakout_count += 1
+            self.fake_breakout_recorded = True
+            fake_breakout_triggered = True
+        elif self.active_breakout == GridBias.SHORT and current_price >= indicator_snapshot.slow_donchian.lower and not self.fake_breakout_recorded:
+            self.fake_breakout_count += 1
+            self.fake_breakout_recorded = True
+            fake_breakout_triggered = True
+
+        return breakout_triggered, fake_breakout_triggered
 
     def _capture_realized_delta(self) -> None:
         realized_delta = self.execution_bot.realized_pnl - self.previous_realized_pnl
@@ -205,7 +248,12 @@ class SingleAssetGridBot:
         current_price: float,
         indicator_snapshot: IndicatorSnapshot,
         macro_state: MacroRegimeState,
+        execution_snapshot: GridExecutionSnapshot | None,
+        breakout_triggered: bool,
+        fake_breakout_triggered: bool,
     ) -> SingleAssetBotSnapshot:
+        gross_notional = abs(self.execution_bot.inventory) * current_price
+        active_grid_levels = len(self.current_plan.buy_levels) + len(self.current_plan.sell_levels) if self.current_plan is not None else 0
         return SingleAssetBotSnapshot(
             symbol=self.symbol,
             timestamp=timestamp,
@@ -222,6 +270,16 @@ class SingleAssetGridBot:
             grid_lower=self.current_plan.lower_range if self.current_plan is not None else None,
             grid_upper=self.current_plan.upper_range if self.current_plan is not None else None,
             grid_count=self.current_plan.grid_count if self.current_plan is not None else 0,
+            active_grid_levels=active_grid_levels,
+            grid_levels_crossed_in_step=0 if execution_snapshot is None else execution_snapshot.grid_levels_crossed_in_step,
+            fills_in_step=0 if execution_snapshot is None else execution_snapshot.fills_in_step,
+            cumulative_grid_levels_crossed=self.execution_bot.cumulative_grid_levels_crossed,
+            cumulative_fills=self.execution_bot.cumulative_fills,
+            gross_notional=gross_notional,
+            breakout_triggered=breakout_triggered,
+            fake_breakout_triggered=fake_breakout_triggered,
+            cumulative_fake_breakouts=self.fake_breakout_count,
+            active_breakout=self.active_breakout,
             inventory=self.execution_bot.inventory,
             realized_pnl=self.execution_bot.realized_pnl,
             indicator_snapshot=indicator_snapshot,
@@ -234,5 +292,13 @@ def _grid_bias_from_trend(regime: TrendRegime) -> GridBias:
     if regime == TrendRegime.BULL:
         return GridBias.LONG
     if regime == TrendRegime.BEAR:
+        return GridBias.SHORT
+    return GridBias.NEUTRAL
+
+
+def _aligned_breakout(indicator_snapshot: IndicatorSnapshot) -> GridBias:
+    if indicator_snapshot.breakout.value == "long" and indicator_snapshot.trend.regime == TrendRegime.BULL:
+        return GridBias.LONG
+    if indicator_snapshot.breakout.value == "short" and indicator_snapshot.trend.regime == TrendRegime.BEAR:
         return GridBias.SHORT
     return GridBias.NEUTRAL
