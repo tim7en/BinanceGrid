@@ -1,0 +1,10 @@
+Start equity: 100,000.00
+Final equity: 4,691.03
+Total return: -95.31%
+Annualized return: -71.32%
+Max drawdown: -96.82%
+Total fills: 27069
+Grid crosses: 30812
+Fill rate: 87.85%
+Aligned breakouts: 696
+Fake breakouts: 83

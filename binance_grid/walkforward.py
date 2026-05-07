@@ -1,15 +1,39 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Mapping
+from itertools import islice
+from typing import Iterator, Mapping, Sequence
 
 from .coordinator import CoordinatorConfig, CoordinatorSnapshot, MarketFrame, RuleBasedGridCoordinator
 
 
-def build_walk_forward_batches(
+class _PrefixView(Sequence):
+    def __init__(self, source: tuple, stop: int) -> None:
+        self._source = source
+        self._stop = stop
+
+    def __len__(self) -> int:
+        return self._stop
+
+    def __iter__(self):
+        return islice(self._source, self._stop)
+
+    def __getitem__(self, item):
+        if isinstance(item, slice):
+            return tuple(self)[item]
+
+        index = item
+        if index < 0:
+            index += self._stop
+        if index < 0 or index >= self._stop:
+            raise IndexError(index)
+        return self._source[index]
+
+
+def iter_walk_forward_batches(
     histories: Mapping[str, MarketFrame],
     config: CoordinatorConfig,
-) -> list[dict[str, MarketFrame]]:
+) -> Iterator[dict[str, MarketFrame]]:
     if not histories:
         raise ValueError("walk-forward histories cannot be empty")
 
@@ -20,7 +44,6 @@ def build_walk_forward_batches(
     )
     daily_required = config.daily_slow_window
     max_steps = min(len(frame.five_minute_bars) for frame in histories.values())
-    batches: list[dict[str, MarketFrame]] = []
 
     for end_index in range(intraday_required, max_steps + 1):
         batch: dict[str, MarketFrame] = {}
@@ -35,19 +58,24 @@ def build_walk_forward_batches(
                 break
             batch[symbol] = MarketFrame(
                 daily_bars=daily_bars,
-                five_minute_bars=history.five_minute_bars[:end_index],
+                five_minute_bars=_PrefixView(history.five_minute_bars, end_index),
             )
         if ready:
-            batches.append(batch)
-    return batches
+            yield batch
+
+
+def build_walk_forward_batches(
+    histories: Mapping[str, MarketFrame],
+    config: CoordinatorConfig,
+) -> list[dict[str, MarketFrame]]:
+    return list(iter_walk_forward_batches(histories, config))
 
 
 def run_walk_forward_backtest(
     coordinator: RuleBasedGridCoordinator,
     histories: Mapping[str, MarketFrame],
 ) -> list[CoordinatorSnapshot]:
-    batches = build_walk_forward_batches(histories, coordinator.config)
-    return [coordinator.step(batch) for batch in batches]
+    return [coordinator.step(batch) for batch in iter_walk_forward_batches(histories, coordinator.config)]
 
 
 def _completed_daily_bars(bars: tuple, current_timestamp: datetime) -> tuple:
